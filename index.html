@@ -1,15 +1,296 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
-    <link rel="stylesheet" type="text/css" href="style.css">
-    <meta charset="utf-8" />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flamingo News Jumper 3D Mobile</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: sans-serif; 
+            background-color: #4f8f4f; /* Fallback color */
+            /* Prevent text selection and tap highlights on mobile */
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #game-container { width: 100%; height: 100vh; display: block; touch-action: none; }
+        #ui-layer {
+            position: absolute; top: 10px; left: 10px; color: white; 
+            text-shadow: 1px 1px 2px black; font-size: 24px; z-index: 10;
+            pointer-events: none; /* Let touches pass through text */
+        }
+        #game-over {
+            display: none; position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); color: white;
+            background: rgba(0,0,0,0.8); padding: 20px; text-align: center;
+            border-radius: 10px; z-index: 20;
+        }
+        button { 
+            padding: 15px 30px; /* Larger button for easier tapping */
+            font-size: 20px; 
+            cursor: pointer; background: #ff69b4; border: none; color: white; border-radius: 5px;
+            touch-action: manipulation; /* Ensures button clicks register properly */
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-layer">Score: <span id="score">0</span></div>
+    <div id="game-over">
+        <h1>Bonk!</h1>
+        <p>Tap button to try again.</p>
+        <button ontouchstart="resetGame()" onclick="resetGame()">Try Again</button>
+    </div>
+    <div id="game-container"></div>
 
-  </head>
-  <body>
-    <main>
-    </main>
-    <script src="sketch.js"></script>
-  </body>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.157.0/build/three.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- Configuration ---
+        const SPAWN_RATE_INITIAL = 1500;
+        // Slightly slower initial speed for mobile playability
+        const GAME_SPEED_INITIAL = 0.12; 
+        const GRAVITY = -0.015;
+        const JUMP_FORCE = 0.4;
+        const GROUND_LEVEL = -1;
+        const LANE_WIDTH = 2;
+        
+        // --- Global Variables ---
+        let scene, camera, renderer, flamingoGroup;
+        let obstacles = [];
+        let score = 0;
+        let gameState = 'playing'; 
+        let verticalVelocity = 0;
+        let isJumping = false;
+        let gameSpeed = GAME_SPEED_INITIAL;
+        let lastSpawnTime = 0;
+        let spawnRate = SPAWN_RATE_INITIAL;
+
+        const scoreEl = document.getElementById('score');
+        const gameOverEl = document.getElementById('game-over');
+
+        init();
+        animate(0);
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0xaaccff, 0.02);
+
+            // Adjust camera slightly for smaller screens
+            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 2.5, 6); 
+            camera.lookAt(0, 0.5, -5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            // Use device pixel ratio for sharper graphics on high-DPI phones
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffe0b5, 1);
+            dirLight.position.set(5, 10, 7);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // Environment
+            const groundGeo = new THREE.PlaneGeometry(50, 100);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x4f8f4f, roughness: 0.8 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = GROUND_LEVEL;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Background Image 
+            const loader = new THREE.TextureLoader();
+            loader.load('https://i.imgur.com/8Q9fXgD.jpeg', function(texture) {
+                 const bgGeo = new THREE.PlaneGeometry(60, 40);
+                 const bgMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+                 const bgMesh = new THREE.Mesh(bgGeo, bgMat);
+                 bgMesh.position.set(0, 10, -30); 
+                 scene.add(bgMesh);
+            });
+
+            createFlamingo();
+
+            // --- CONTROLS SECTION (UPDATED FOR MOBILE) ---
+
+            // 1. Keyboard support (Spacebar)
+            window.addEventListener('keydown', (e) => {
+                if (e.code === 'Space') attemptJump();
+            });
+
+            // 2. Touch support (Tap anywhere on screen)
+            // We use 'touchstart' for immediate response. 
+            // { passive: false } allows us to preventDefault browser scrolling if needed.
+            window.addEventListener('touchstart', (e) => {
+                // Don't jump if they tapped the "Try Again" button
+                if(e.target.tagName === 'BUTTON') return;
+                
+                // Prevent default behaviors like double-tap zoom on some devices
+                if(e.cancelable) e.preventDefault();
+                
+                attemptJump();
+            }, { passive: false });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // Helper function to consolidate jump logic
+        function attemptJump() {
+            if (!isJumping && gameState === 'playing') {
+                jump();
+            }
+        }
+
+        function createFlamingo() {
+            flamingoGroup = new THREE.Group();
+            const pinkMat = new THREE.MeshStandardMaterial({ color: 0xff69b4 }); 
+            const beakMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+            
+            const bodyGeo = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
+            const body = new THREE.Mesh(bodyGeo, pinkMat);
+            body.position.y = 0.6;
+            body.castShadow = true;
+            flamingoGroup.add(body);
+
+            const headGeo = new THREE.SphereGeometry(0.25);
+            const head = new THREE.Mesh(headGeo, pinkMat);
+            head.position.set(0, 1.2, 0.2);
+            head.castShadow = true;
+            flamingoGroup.add(head);
+            
+            const beakGeo = new THREE.ConeGeometry(0.1, 0.4, 8);
+            const beak = new THREE.Mesh(beakGeo, beakMat);
+            beak.rotation.x = Math.PI/2;
+            beak.position.set(0, 1.15, 0.55);
+            flamingoGroup.add(beak);
+
+            const glassMat = new THREE.MeshBasicMaterial({color: 0x000000, wireframe: true});
+            const lensGeo = new THREE.TorusGeometry(0.08, 0.02, 8, 16);
+            const lensL = new THREE.Mesh(lensGeo, glassMat);
+            const lensR = new THREE.Mesh(lensGeo, glassMat);
+            lensL.position.set(-0.1, 1.25, 0.4);
+            lensR.position.set(0.1, 1.25, 0.4);
+            flamingoGroup.add(lensL);
+            flamingoGroup.add(lensR);
+
+            flamingoGroup.position.set(0, GROUND_LEVEL, -2);
+            scene.add(flamingoGroup);
+        }
+
+        function jump() {
+            verticalVelocity = JUMP_FORCE;
+            isJumping = true;
+        }
+
+        function spawnObstacle() {
+            const isNewspaper = Math.random() > 0.5;
+            let obstacleMesh;
+
+            if (isNewspaper) {
+                const geo = new THREE.BoxGeometry(0.8, 0.1, 0.6);
+                const mat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+                obstacleMesh = new THREE.Mesh(geo, mat);
+            } else {
+                const geo = new THREE.TorusGeometry(0.4, 0.15, 8, 20, Math.PI / 1.5);
+                const mat = new THREE.MeshStandardMaterial({ color: 0xffea00 });
+                obstacleMesh = new THREE.Mesh(geo, mat);
+                obstacleMesh.rotation.z = Math.PI / 4;
+            }
+            
+            // Reduced lanes to 2 for easier mobile visibility
+            const lane = (Math.random() > 0.5 ? 1 : -1) * (LANE_WIDTH / 1.5);
+            
+            obstacleMesh.position.set(lane, GROUND_LEVEL + 0.3, -40); 
+            obstacleMesh.castShadow = true;
+            scene.add(obstacleMesh);
+            obstacles.push(obstacleMesh);
+        }
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+            if (gameState !== 'playing') return;
+
+            score++;
+            scoreEl.innerText = Math.floor(score / 10);
+            gameSpeed += 0.000015; 
+
+            verticalVelocity += GRAVITY;
+            flamingoGroup.position.y += verticalVelocity;
+
+            if (flamingoGroup.position.y <= GROUND_LEVEL) {
+                flamingoGroup.position.y = GROUND_LEVEL;
+                verticalVelocity = 0;
+                isJumping = false;
+            }
+
+            if (time - lastSpawnTime > spawnRate) {
+                spawnObstacle();
+                lastSpawnTime = time;
+                spawnRate = Math.max(700, spawnRate - 15);
+            }
+
+            const playerBox = new THREE.Box3().setFromObject(flamingoGroup);
+            playerBox.expandByScalar(-0.1); 
+
+            obstacles.forEach((obs, index) => {
+                obs.position.z += gameSpeed;
+                obs.rotation.x += 0.02;
+                obs.rotation.y += 0.01;
+
+                const obstacleBox = new THREE.Box3().setFromObject(obs);
+                if (playerBox.intersectsBox(obstacleBox)) {
+                    endGame();
+                }
+
+                if (obs.position.z > 6) {
+                    scene.remove(obs);
+                    obstacles.splice(index, 1);
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        function endGame() {
+            gameState = 'gameover';
+            gameOverEl.style.display = 'block';
+        }
+
+        // Exposed globally
+        window.resetGame = function() {
+            obstacles.forEach(obs => scene.remove(obs));
+            obstacles = [];
+            score = 0;
+            gameSpeed = GAME_SPEED_INITIAL;
+            spawnRate = SPAWN_RATE_INITIAL;
+            flamingoGroup.position.y = GROUND_LEVEL;
+            verticalVelocity = 0;
+            gameOverEl.style.display = 'none';
+            gameState = 'playing';
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            // Update pixel ratio on resize as well (e.g. moving between screens)
+            renderer.setPixelRatio(window.devicePixelRatio);
+        }
+    </script>
+</body>
 </html>
