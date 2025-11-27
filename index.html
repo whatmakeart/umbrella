@@ -3,14 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Flamingo News Jumper 3D Mobile</title>
+    <title>Flamingo Sprite Jumper 3D</title>
     <style>
         body { 
             margin: 0; 
             overflow: hidden; 
-            font-family: sans-serif; 
-            background-color: #4f8f4f; /* Fallback color */
-            /* Prevent text selection and tap highlights on mobile */
+            font-family: 'Courier New', Courier, monospace; 
+            background-color: #283b56; /* Matches the sprite sheet background color */
             user-select: none;
             -webkit-touch-callout: none;
             -webkit-tap-highlight-color: transparent;
@@ -18,28 +17,38 @@
         #game-container { width: 100%; height: 100vh; display: block; touch-action: none; }
         #ui-layer {
             position: absolute; top: 10px; left: 10px; color: white; 
-            text-shadow: 1px 1px 2px black; font-size: 24px; z-index: 10;
-            pointer-events: none; /* Let touches pass through text */
+            text-shadow: 2px 2px 0px #000; font-size: 24px; z-index: 10;
+            pointer-events: none; 
+            font-weight: bold;
         }
         #game-over {
             display: none; position: absolute; top: 50%; left: 50%;
             transform: translate(-50%, -50%); color: white;
-            background: rgba(0,0,0,0.8); padding: 20px; text-align: center;
-            border-radius: 10px; z-index: 20;
+            background: rgba(0,0,0,0.9); padding: 20px; text-align: center;
+            border: 4px solid white;
+            border-radius: 0px; z-index: 20;
+            box-shadow: 5px 5px 0px #000;
         }
         button { 
-            padding: 15px 30px; /* Larger button for easier tapping */
+            padding: 15px 30px; 
             font-size: 20px; 
-            cursor: pointer; background: #ff69b4; border: none; color: white; border-radius: 5px;
-            touch-action: manipulation; /* Ensures button clicks register properly */
+            font-family: 'Courier New', Courier, monospace; 
+            cursor: pointer; background: #ff69b4; border: 2px solid white; color: white; 
+            text-transform: uppercase;
+            font-weight: bold;
+            touch-action: manipulation; 
+        }
+        button:active {
+            background: #d1478e;
+            transform: translateY(2px);
         }
     </style>
 </head>
 <body>
-    <div id="ui-layer">Score: <span id="score">0</span></div>
+    <div id="ui-layer">SCORE: <span id="score">0</span></div>
     <div id="game-over">
-        <h1>Bonk!</h1>
-        <p>Tap button to try again.</p>
+        <h1>SPLASH!</h1>
+        <p>You hit an obstacle.</p>
         <button ontouchstart="resetGame()" onclick="resetGame()">Try Again</button>
     </div>
     <div id="game-container"></div>
@@ -57,15 +66,18 @@
 
         // --- Configuration ---
         const SPAWN_RATE_INITIAL = 1500;
-        // Slightly slower initial speed for mobile playability
         const GAME_SPEED_INITIAL = 0.12; 
         const GRAVITY = -0.015;
-        const JUMP_FORCE = 0.4;
+        const JUMP_FORCE = 0.35;
         const GROUND_LEVEL = -1;
         const LANE_WIDTH = 2;
         
+        // Sprite Sheet Config
+        const SPRITE_COLS = 9; // Total columns in the image
+        const SPRITE_ROWS = 4; // Total rows in the image
+        
         // --- Global Variables ---
-        let scene, camera, renderer, flamingoGroup;
+        let scene, camera, renderer, flamingoGroup, flamingoSprite;
         let obstacles = [];
         let score = 0;
         let gameState = 'playing'; 
@@ -74,157 +86,176 @@
         let gameSpeed = GAME_SPEED_INITIAL;
         let lastSpawnTime = 0;
         let spawnRate = SPAWN_RATE_INITIAL;
+        let clock = new THREE.Clock();
 
         const scoreEl = document.getElementById('score');
         const gameOverEl = document.getElementById('game-over');
 
         init();
-        animate(0);
+        animate();
 
         function init() {
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0xaaccff, 0.02);
+            // Matching fog to the blueish background of the sprite sheet for style
+            scene.fog = new THREE.FogExp2(0x283b56, 0.03);
 
-            // Adjust camera slightly for smaller screens
             camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 2.5, 6); 
+            camera.position.set(0, 2, 5); 
             camera.lookAt(0, 0.5, -5);
 
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            // Use device pixel ratio for sharper graphics on high-DPI phones
+            renderer = new THREE.WebGLRenderer({ antialias: false }); // False for pixel art style
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
             document.getElementById('game-container').appendChild(renderer.domElement);
 
             // Lights
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
             scene.add(ambientLight);
-            const dirLight = new THREE.DirectionalLight(0xffe0b5, 1);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
             dirLight.position.set(5, 10, 7);
             dirLight.castShadow = true;
             scene.add(dirLight);
 
-            // Environment
+            // Ground
             const groundGeo = new THREE.PlaneGeometry(50, 100);
-            const groundMat = new THREE.MeshStandardMaterial({ color: 0x4f8f4f, roughness: 0.8 });
+            // Darker ground to make the pink pop
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x1e2b40, roughness: 0.9 });
             const ground = new THREE.Mesh(groundGeo, groundMat);
             ground.rotation.x = -Math.PI / 2;
             ground.position.y = GROUND_LEVEL;
             ground.receiveShadow = true;
             scene.add(ground);
 
-            // Background Image 
-            const loader = new THREE.TextureLoader();
-            loader.load('./1764249432806.jpg', function(texture) {
-                 const bgGeo = new THREE.PlaneGeometry(60, 40);
-                 const bgMat = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
-                 const bgMesh = new THREE.Mesh(bgGeo, bgMat);
-                 bgMesh.position.set(0, 10, -30); 
-                 scene.add(bgMesh);
-            });
+            createFlamingoSprite();
 
-            createFlamingo();
-
-            // --- CONTROLS SECTION (UPDATED FOR MOBILE) ---
-
-            // 1. Keyboard support (Spacebar)
+            // Controls
             window.addEventListener('keydown', (e) => {
                 if (e.code === 'Space') attemptJump();
             });
 
-            // 2. Touch support (Tap anywhere on screen)
-            // We use 'touchstart' for immediate response. 
-            // { passive: false } allows us to preventDefault browser scrolling if needed.
             window.addEventListener('touchstart', (e) => {
-                // Don't jump if they tapped the "Try Again" button
                 if(e.target.tagName === 'BUTTON') return;
-                
-                // Prevent default behaviors like double-tap zoom on some devices
                 if(e.cancelable) e.preventDefault();
-                
                 attemptJump();
             }, { passive: false });
 
             window.addEventListener('resize', onWindowResize);
         }
 
-        // Helper function to consolidate jump logic
-        function attemptJump() {
-            if (!isJumping && gameState === 'playing') {
-                jump();
-            }
-        }
-
-        function createFlamingo() {
+        function createFlamingoSprite() {
+            // Group holds the sprite and collision logic
             flamingoGroup = new THREE.Group();
-            const pinkMat = new THREE.MeshStandardMaterial({ color: 0xff69b4 }); 
-            const beakMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
             
-            const bodyGeo = new THREE.CapsuleGeometry(0.3, 0.8, 4, 8);
-            const body = new THREE.Mesh(bodyGeo, pinkMat);
-            body.position.y = 0.6;
-            body.castShadow = true;
-            flamingoGroup.add(body);
+            const loader = new THREE.TextureLoader();
+            // LOAD THE UPLOADED IMAGE HERE
+            loader.load('./2488.jpg', (texture) => {
+                // Critical for Pixel Art look:
+                texture.magFilter = THREE.NearestFilter;
+                texture.minFilter = THREE.NearestFilter;
+                texture.colorSpace = THREE.SRGBColorSpace;
 
-            const headGeo = new THREE.SphereGeometry(0.25);
-            const head = new THREE.Mesh(headGeo, pinkMat);
-            head.position.set(0, 1.2, 0.2);
-            head.castShadow = true;
-            flamingoGroup.add(head);
-            
-            const beakGeo = new THREE.ConeGeometry(0.1, 0.4, 8);
-            const beak = new THREE.Mesh(beakGeo, beakMat);
-            beak.rotation.x = Math.PI/2;
-            beak.position.set(0, 1.15, 0.55);
-            flamingoGroup.add(beak);
+                // Setup UV Mapping for Sprite Sheet
+                // repeat.x = 1 / total columns
+                // repeat.y = 1 / total rows
+                texture.repeat.set(1 / SPRITE_COLS, 1 / SPRITE_ROWS);
+                
+                // Initialize at specific frame
+                // We want the "BACK" row. In UVs, (0,0) is bottom-left.
+                // Row 0: Top-Down view
+                // Row 1: BACK view  <-- We want this
+                // Row 2: 3/4 view
+                // Row 3: Side view
+                texture.offset.y = 1 / 4; // 0.25 (Selects the 2nd row from bottom)
 
-            const glassMat = new THREE.MeshBasicMaterial({color: 0x000000, wireframe: true});
-            const lensGeo = new THREE.TorusGeometry(0.08, 0.02, 8, 16);
-            const lensL = new THREE.Mesh(lensGeo, glassMat);
-            const lensR = new THREE.Mesh(lensGeo, glassMat);
-            lensL.position.set(-0.1, 1.25, 0.4);
-            lensR.position.set(0.1, 1.25, 0.4);
-            flamingoGroup.add(lensL);
-            flamingoGroup.add(lensR);
+                const geometry = new THREE.PlaneGeometry(2, 2); // Size of the sprite plane
+                const material = new THREE.MeshStandardMaterial({
+                    map: texture,
+                    transparent: true,
+                    side: THREE.DoubleSide,
+                    alphaTest: 0.5 // Helps with cutout edges if image was PNG
+                });
+
+                flamingoSprite = new THREE.Mesh(geometry, material);
+                flamingoSprite.position.y = 1; // Center the sprite relative to the group
+                flamingoSprite.castShadow = true;
+                
+                flamingoGroup.add(flamingoSprite);
+            });
+
+            // Add a simple invisible box for collision debug if needed
+            // const debugBox = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1, 0.5), new THREE.MeshBasicMaterial({wireframe:true, color: 'red'}));
+            // flamingoGroup.add(debugBox);
 
             flamingoGroup.position.set(0, GROUND_LEVEL, -2);
             scene.add(flamingoGroup);
         }
 
-        function jump() {
-            verticalVelocity = JUMP_FORCE;
-            isJumping = true;
+        function attemptJump() {
+            if (!isJumping && gameState === 'playing') {
+                verticalVelocity = JUMP_FORCE;
+                isJumping = true;
+            }
+        }
+
+        function updateSpriteAnimation(elapsedTime) {
+            if (!flamingoSprite) return;
+
+            const texture = flamingoSprite.material.map;
+
+            if (isJumping) {
+                // JUMP FRAME: Column 5 (Index 4) looks like wings out/hover
+                const jumpColumn = 4; 
+                texture.offset.x = jumpColumn / SPRITE_COLS;
+            } else {
+                // RUN CYCLE: Columns 0, 1, 2, 3
+                // Change frame every 150ms
+                const frameIndex = Math.floor(elapsedTime * 8) % 4; 
+                texture.offset.x = frameIndex / SPRITE_COLS;
+            }
         }
 
         function spawnObstacle() {
-            const isNewspaper = Math.random() > 0.5;
+            // Simplified obstacles to match pixel style
+            const isWide = Math.random() > 0.5;
             let obstacleMesh;
 
-            if (isNewspaper) {
-                const geo = new THREE.BoxGeometry(0.8, 0.1, 0.6);
-                const mat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
-                obstacleMesh = new THREE.Mesh(geo, mat);
+            const boxMat = new THREE.MeshStandardMaterial({ color: 0xffea00 }); // Yellow obstacles
+
+            if (isWide) {
+                // Log/Newspaper shape
+                const geo = new THREE.BoxGeometry(1.2, 0.4, 0.4);
+                obstacleMesh = new THREE.Mesh(geo, boxMat);
             } else {
-                const geo = new THREE.TorusGeometry(0.4, 0.15, 8, 20, Math.PI / 1.5);
-                const mat = new THREE.MeshStandardMaterial({ color: 0xffea00 });
-                obstacleMesh = new THREE.Mesh(geo, mat);
-                obstacleMesh.rotation.z = Math.PI / 4;
+                // Tall block
+                const geo = new THREE.BoxGeometry(0.5, 0.8, 0.5);
+                obstacleMesh = new THREE.Mesh(geo, boxMat);
             }
             
-            // Reduced lanes to 2 for easier mobile visibility
             const lane = (Math.random() > 0.5 ? 1 : -1) * (LANE_WIDTH / 1.5);
-            
-            obstacleMesh.position.set(lane, GROUND_LEVEL + 0.3, -40); 
+            obstacleMesh.position.set(lane, GROUND_LEVEL + 0.4, -40); 
             obstacleMesh.castShadow = true;
+            
+            // Add a black outline to match pixel art feel
+            const outlineGeo = new THREE.BoxGeometry(obstacleMesh.geometry.parameters.width + 0.05, obstacleMesh.geometry.parameters.height + 0.05, obstacleMesh.geometry.parameters.depth + 0.05);
+            const outlineMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
+            const outline = new THREE.Mesh(outlineGeo, outlineMat);
+            obstacleMesh.add(outline);
+
             scene.add(obstacleMesh);
             obstacles.push(obstacleMesh);
         }
 
-        function animate(time) {
+        function animate() {
             requestAnimationFrame(animate);
             if (gameState !== 'playing') return;
 
+            const elapsedTime = clock.getElapsedTime();
+            
+            // 1. Update Animation
+            updateSpriteAnimation(elapsedTime);
+
+            // 2. Physics
             score++;
             scoreEl.innerText = Math.floor(score / 10);
             gameSpeed += 0.000015; 
@@ -238,19 +269,24 @@
                 isJumping = false;
             }
 
-            if (time - lastSpawnTime > spawnRate) {
+            // 3. Spawning
+            const currentTime = Date.now();
+            if (currentTime - lastSpawnTime > spawnRate) {
                 spawnObstacle();
-                lastSpawnTime = time;
+                lastSpawnTime = currentTime;
                 spawnRate = Math.max(700, spawnRate - 15);
             }
 
-            const playerBox = new THREE.Box3().setFromObject(flamingoGroup);
-            playerBox.expandByScalar(-0.1); 
+            // 4. Collision & Movement
+            // We use a smaller hitbox than the sprite because sprites have empty space
+            const playerBox = new THREE.Box3();
+            playerBox.setFromCenterAndSize(
+                new THREE.Vector3(flamingoGroup.position.x, flamingoGroup.position.y + 0.5, flamingoGroup.position.z), 
+                new THREE.Vector3(0.4, 0.8, 0.4) 
+            );
 
             obstacles.forEach((obs, index) => {
                 obs.position.z += gameSpeed;
-                obs.rotation.x += 0.02;
-                obs.rotation.y += 0.01;
 
                 const obstacleBox = new THREE.Box3().setFromObject(obs);
                 if (playerBox.intersectsBox(obstacleBox)) {
@@ -271,7 +307,6 @@
             gameOverEl.style.display = 'block';
         }
 
-        // Exposed globally
         window.resetGame = function() {
             obstacles.forEach(obs => scene.remove(obs));
             obstacles = [];
@@ -282,13 +317,13 @@
             verticalVelocity = 0;
             gameOverEl.style.display = 'none';
             gameState = 'playing';
+            clock.start();
         }
 
         function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
-            // Update pixel ratio on resize as well (e.g. moving between screens)
             renderer.setPixelRatio(window.devicePixelRatio);
         }
     </script>
