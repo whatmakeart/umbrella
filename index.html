@@ -3,329 +3,420 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Flamingo Sprite Jumper 3D</title>
+    <title>Flamingo 3D: Forward Rush</title>
     <style>
-        body { 
-            margin: 0; 
-            overflow: hidden; 
-            font-family: 'Courier New', Courier, monospace; 
-            background-color: #283b56; /* Matches the sprite sheet background color */
-            user-select: none;
-            -webkit-touch-callout: none;
-            -webkit-tap-highlight-color: transparent;
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a0b2e; /* Deep purple night sky */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none;
         }
-        #game-container { width: 100%; height: 100vh; display: block; touch-action: none; }
-        #ui-layer {
-            position: absolute; top: 10px; left: 10px; color: white; 
-            text-shadow: 2px 2px 0px #000; font-size: 24px; z-index: 10;
-            pointer-events: none; 
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        #score {
+            font-size: 40px;
             font-weight: bold;
+            color: #fff;
+            text-shadow: 0 0 10px #ff00de;
+            padding: 20px;
+            text-align: center;
         }
-        #game-over {
-            display: none; position: absolute; top: 50%; left: 50%;
-            transform: translate(-50%, -50%); color: white;
-            background: rgba(0,0,0,0.9); padding: 20px; text-align: center;
-            border: 4px solid white;
-            border-radius: 0px; z-index: 20;
-            box-shadow: 5px 5px 0px #000;
+        #instructions {
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            padding-bottom: 20px;
+            font-size: 16px;
         }
-        button { 
-            padding: 15px 30px; 
-            font-size: 20px; 
-            font-family: 'Courier New', Courier, monospace; 
-            cursor: pointer; background: #ff69b4; border: 2px solid white; color: white; 
-            text-transform: uppercase;
-            font-weight: bold;
-            touch-action: manipulation; 
-        }
-        button:active {
-            background: #d1478e;
-            transform: translateY(2px);
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
         }
     </style>
 </head>
 <body>
-    <div id="ui-layer">SCORE: <span id="score">0</span></div>
-    <div id="game-over">
-        <h1>SPLASH!</h1>
-        <p>You hit an obstacle.</p>
-        <button ontouchstart="resetGame()" onclick="resetGame()">Try Again</button>
+
+    <div id="loading">Loading Game Assets...</div>
+    
+    <div id="ui">
+        <div id="score">0</div>
+        <div id="instructions">
+            ⬅️ LEFT | JUMP (Space) | RIGHT ➡️
+        </div>
     </div>
-    <div id="game-container"></div>
 
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.157.0/build/three.module.js"
-            }
-        }
-    </script>
+    <canvas id="gameCanvas"></canvas>
 
-    <script type="module">
-        import * as THREE from 'three';
+    <script>
+        // --- CONFIGURATION ---
+        const CONFIG = {
+            spriteSrc: './1764264790671.jpg',
+            cols: 9,
+            rows: 4,
+            rowToUse: 2, // Row 2 is the BACK view (running away)
+            
+            laneWidth: 120, // Distance between lanes in 3D world units
+            gravity: 0.8,
+            jumpForce: -16,
+            baseSpeed: 15,
+            
+            // 3D Projection Settings
+            fov: 300,
+            cameraHeight: 150,
+            cameraDistance: 100, // How far behind player
+            horizonY: 0.4, // Screen percentage
+        };
 
-        // --- Configuration ---
-        const SPAWN_RATE_INITIAL = 1500;
-        const GAME_SPEED_INITIAL = 0.12; 
-        const GRAVITY = -0.015;
-        const JUMP_FORCE = 0.35;
-        const GROUND_LEVEL = -1;
-        const LANE_WIDTH = 2;
-        
-        // Sprite Sheet Config
-        const SPRITE_COLS = 9; // Total columns in the image
-        const SPRITE_ROWS = 4; // Total rows in the image
-        
-        // --- Global Variables ---
-        let scene, camera, renderer, flamingoGroup, flamingoSprite;
-        let obstacles = [];
-        let score = 0;
-        let gameState = 'playing'; 
-        let verticalVelocity = 0;
-        let isJumping = false;
-        let gameSpeed = GAME_SPEED_INITIAL;
-        let lastSpawnTime = 0;
-        let spawnRate = SPAWN_RATE_INITIAL;
-        let clock = new THREE.Clock();
+        // --- ASSETS ---
+        const sprite = new Image();
+        sprite.src = CONFIG.spriteSrc;
+        let assetsLoaded = false;
 
+        sprite.onload = () => {
+            assetsLoaded = true;
+            document.getElementById('loading').style.display = 'none';
+        };
+        sprite.onerror = () => {
+            document.getElementById('loading').innerHTML = "Image not found.<br>Ensure '1764264790671.jpg' is in the folder.";
+        };
+
+        // --- SETUP ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
         const scoreEl = document.getElementById('score');
-        const gameOverEl = document.getElementById('game-over');
 
-        init();
-        animate();
-
-        function init() {
-            scene = new THREE.Scene();
-            // Matching fog to the blueish background of the sprite sheet for style
-            scene.fog = new THREE.FogExp2(0x283b56, 0.03);
-
-            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 2, 5); 
-            camera.lookAt(0, 0.5, -5);
-
-            renderer = new THREE.WebGLRenderer({ antialias: false }); // False for pixel art style
-            renderer.setPixelRatio(window.devicePixelRatio);
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.shadowMap.enabled = true;
-            document.getElementById('game-container').appendChild(renderer.domElement);
-
-            // Lights
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-            scene.add(ambientLight);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(5, 10, 7);
-            dirLight.castShadow = true;
-            scene.add(dirLight);
-
-            // Ground
-            const groundGeo = new THREE.PlaneGeometry(50, 100);
-            // Darker ground to make the pink pop
-            const groundMat = new THREE.MeshStandardMaterial({ color: 0x1e2b40, roughness: 0.9 });
-            const ground = new THREE.Mesh(groundGeo, groundMat);
-            ground.rotation.x = -Math.PI / 2;
-            ground.position.y = GROUND_LEVEL;
-            ground.receiveShadow = true;
-            scene.add(ground);
-
-            createFlamingoSprite();
-
-            // Controls
-            window.addEventListener('keydown', (e) => {
-                if (e.code === 'Space') attemptJump();
-            });
-
-            window.addEventListener('touchstart', (e) => {
-                if(e.target.tagName === 'BUTTON') return;
-                if(e.cancelable) e.preventDefault();
-                attemptJump();
-            }, { passive: false });
-
-            window.addEventListener('resize', onWindowResize);
+        let width, height;
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            CONFIG.horizonY = height * 0.45;
         }
+        window.addEventListener('resize', resize);
+        resize();
 
-        function createFlamingoSprite() {
-            // Group holds the sprite and collision logic
-            flamingoGroup = new THREE.Group();
+        // --- GAME STATE ---
+        let frame = 0;
+        let score = 0;
+        let speed = CONFIG.baseSpeed;
+        let gameActive = true;
+        let obstacles = [];
+
+        // --- PLAYER OBJECT ---
+        const player = {
+            lane: 0, // -1 (Left), 0 (Center), 1 (Right)
+            x: 0,    // Interpolated X
+            y: 0,    // Jump Y
+            z: 0,    // Always 0 in world space
+            vy: 0,
+            isJumping: false,
+            frameIndex: 0,
             
-            const loader = new THREE.TextureLoader();
-            // LOAD THE UPLOADED IMAGE HERE
-            loader.load('./1764264443243.jpg', (texture) => {
-                // Critical for Pixel Art look:
-                texture.magFilter = THREE.NearestFilter;
-                texture.minFilter = THREE.NearestFilter;
-                texture.colorSpace = THREE.SRGBColorSpace;
+            update() {
+                // Smooth lane switching
+                const targetX = this.lane * CONFIG.laneWidth;
+                this.x += (targetX - this.x) * 0.2;
 
-                // Setup UV Mapping for Sprite Sheet
-                // repeat.x = 1 / total columns
-                // repeat.y = 1 / total rows
-                texture.repeat.set(1 / SPRITE_COLS, 1 / SPRITE_ROWS);
-                
-                // Initialize at specific frame
-                // We want the "BACK" row. In UVs, (0,0) is bottom-left.
-                // Row 0: Top-Down view
-                // Row 1: BACK view  <-- We want this
-                // Row 2: 3/4 view
-                // Row 3: Side view
-                texture.offset.y = 1 / 4; // 0.25 (Selects the 2nd row from bottom)
-
-                const geometry = new THREE.PlaneGeometry(2, 2); // Size of the sprite plane
-                const material = new THREE.MeshStandardMaterial({
-                    map: texture,
-                    transparent: true,
-                    side: THREE.DoubleSide,
-                    alphaTest: 0.5 // Helps with cutout edges if image was PNG
-                });
-
-                flamingoSprite = new THREE.Mesh(geometry, material);
-                flamingoSprite.position.y = 1; // Center the sprite relative to the group
-                flamingoSprite.castShadow = true;
-                
-                flamingoGroup.add(flamingoSprite);
-            });
-
-            // Add a simple invisible box for collision debug if needed
-            // const debugBox = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1, 0.5), new THREE.MeshBasicMaterial({wireframe:true, color: 'red'}));
-            // flamingoGroup.add(debugBox);
-
-            flamingoGroup.position.set(0, GROUND_LEVEL, -2);
-            scene.add(flamingoGroup);
-        }
-
-        function attemptJump() {
-            if (!isJumping && gameState === 'playing') {
-                verticalVelocity = JUMP_FORCE;
-                isJumping = true;
-            }
-        }
-
-        function updateSpriteAnimation(elapsedTime) {
-            if (!flamingoSprite) return;
-
-            const texture = flamingoSprite.material.map;
-
-            if (isJumping) {
-                // JUMP FRAME: Column 5 (Index 4) looks like wings out/hover
-                const jumpColumn = 4; 
-                texture.offset.x = jumpColumn / SPRITE_COLS;
-            } else {
-                // RUN CYCLE: Columns 0, 1, 2, 3
-                // Change frame every 150ms
-                const frameIndex = Math.floor(elapsedTime * 8) % 4; 
-                texture.offset.x = frameIndex / SPRITE_COLS;
-            }
-        }
-
-        function spawnObstacle() {
-            // Simplified obstacles to match pixel style
-            const isWide = Math.random() > 0.5;
-            let obstacleMesh;
-
-            const boxMat = new THREE.MeshStandardMaterial({ color: 0xffea00 }); // Yellow obstacles
-
-            if (isWide) {
-                // Log/Newspaper shape
-                const geo = new THREE.BoxGeometry(1.2, 0.4, 0.4);
-                obstacleMesh = new THREE.Mesh(geo, boxMat);
-            } else {
-                // Tall block
-                const geo = new THREE.BoxGeometry(0.5, 0.8, 0.5);
-                obstacleMesh = new THREE.Mesh(geo, boxMat);
-            }
-            
-            const lane = (Math.random() > 0.5 ? 1 : -1) * (LANE_WIDTH / 1.5);
-            obstacleMesh.position.set(lane, GROUND_LEVEL + 0.4, -40); 
-            obstacleMesh.castShadow = true;
-            
-            // Add a black outline to match pixel art feel
-            const outlineGeo = new THREE.BoxGeometry(obstacleMesh.geometry.parameters.width + 0.05, obstacleMesh.geometry.parameters.height + 0.05, obstacleMesh.geometry.parameters.depth + 0.05);
-            const outlineMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide });
-            const outline = new THREE.Mesh(outlineGeo, outlineMat);
-            obstacleMesh.add(outline);
-
-            scene.add(obstacleMesh);
-            obstacles.push(obstacleMesh);
-        }
-
-        function animate() {
-            requestAnimationFrame(animate);
-            if (gameState !== 'playing') return;
-
-            const elapsedTime = clock.getElapsedTime();
-            
-            // 1. Update Animation
-            updateSpriteAnimation(elapsedTime);
-
-            // 2. Physics
-            score++;
-            scoreEl.innerText = Math.floor(score / 10);
-            gameSpeed += 0.000015; 
-
-            verticalVelocity += GRAVITY;
-            flamingoGroup.position.y += verticalVelocity;
-
-            if (flamingoGroup.position.y <= GROUND_LEVEL) {
-                flamingoGroup.position.y = GROUND_LEVEL;
-                verticalVelocity = 0;
-                isJumping = false;
-            }
-
-            // 3. Spawning
-            const currentTime = Date.now();
-            if (currentTime - lastSpawnTime > spawnRate) {
-                spawnObstacle();
-                lastSpawnTime = currentTime;
-                spawnRate = Math.max(700, spawnRate - 15);
-            }
-
-            // 4. Collision & Movement
-            // We use a smaller hitbox than the sprite because sprites have empty space
-            const playerBox = new THREE.Box3();
-            playerBox.setFromCenterAndSize(
-                new THREE.Vector3(flamingoGroup.position.x, flamingoGroup.position.y + 0.5, flamingoGroup.position.z), 
-                new THREE.Vector3(0.4, 0.8, 0.4) 
-            );
-
-            obstacles.forEach((obs, index) => {
-                obs.position.z += gameSpeed;
-
-                const obstacleBox = new THREE.Box3().setFromObject(obs);
-                if (playerBox.intersectsBox(obstacleBox)) {
-                    endGame();
+                // Jump Physics
+                if (this.isJumping) {
+                    this.y += this.vy;
+                    this.vy += CONFIG.gravity;
+                    
+                    if (this.y >= 0) {
+                        this.y = 0;
+                        this.isJumping = false;
+                        this.vy = 0;
+                    }
                 }
 
-                if (obs.position.z > 6) {
-                    scene.remove(obs);
-                    obstacles.splice(index, 1);
+                // Animation Frame
+                if (frame % 4 === 0) {
+                    this.frameIndex = (this.frameIndex + 1) % CONFIG.cols;
                 }
-            });
+            },
 
-            renderer.render(scene, camera);
+            draw() {
+                // Project Player to Screen
+                // Player is at Z=0, but we push camera back
+                const scale = CONFIG.fov / (CONFIG.fov + CONFIG.cameraDistance);
+                const screenX = width/2 + this.x * scale;
+                const screenY = CONFIG.horizonY + (CONFIG.cameraHeight + this.y) * scale;
+                
+                const spriteSize = 120 * scale;
+
+                if (assetsLoaded) {
+                    const sw = sprite.width / CONFIG.cols;
+                    const sh = sprite.height / CONFIG.rows;
+                    
+                    // Shadow
+                    ctx.fillStyle = "rgba(0,0,0,0.3)";
+                    ctx.beginPath();
+                    ctx.ellipse(screenX, screenY + spriteSize - 10*scale, spriteSize/3, spriteSize/8, 0, 0, Math.PI*2);
+                    ctx.fill();
+
+                    // Sprite
+                    ctx.drawImage(
+                        sprite,
+                        this.frameIndex * sw, CONFIG.rowToUse * sh, sw, sh,
+                        screenX - spriteSize/2, screenY - spriteSize + 10, // Anchor at feet
+                        spriteSize, spriteSize
+                    );
+                } else {
+                    // Fallback Box
+                    ctx.fillStyle = 'hotpink';
+                    ctx.fillRect(screenX - 25, screenY - 50, 50, 50);
+                }
+            }
+        };
+
+        // --- OBSTACLES ---
+        const TYPES = [
+            { type: 'ground', emoji: '🚧', size: 60, yOff: 0 },
+            { type: 'ground', emoji: '🪨', size: 50, yOff: 0 },
+            { type: 'ground', emoji: '🐊', size: 70, yOff: 0 }, // Alligator
+            { type: 'air',    emoji: '🦅', size: 60, yOff: -110 }, // Eagle (Needs jump)
+            { type: 'air',    emoji: '🛸', size: 70, yOff: -130 }  // UFO
+        ];
+
+        class Obstacle {
+            constructor() {
+                this.lane = Math.floor(Math.random() * 3) - 1; // -1, 0, 1
+                this.z = 2000; // Start far away
+                this.x = this.lane * CONFIG.laneWidth;
+                
+                const variant = TYPES[Math.floor(Math.random() * TYPES.length)];
+                this.emoji = variant.emoji;
+                this.sizeBase = variant.size;
+                this.yOff = variant.yOff;
+                this.active = true;
+            }
+
+            update() {
+                this.z -= speed;
+                
+                // Collision Logic
+                // If Z is close to player (0) and Lane matches
+                if (this.active && this.z < 50 && this.z > -50) {
+                    if (Math.abs(player.x - this.x) < 40) { // Approx lane check
+                        // Check height for air obstacles vs jumping
+                        const playerTop = player.y - 60; // Approx head
+                        const playerBot = player.y;      // Feet
+                        
+                        const obTop = this.yOff - 30;
+                        const obBot = this.yOff + 10;
+
+                        // Simple intersection
+                        if (playerBot > obTop && playerTop < obBot) {
+                           gameOver();
+                        }
+                    }
+                }
+            }
+
+            draw() {
+                if (this.z < -CONFIG.cameraDistance) return;
+
+                const scale = CONFIG.fov / (CONFIG.fov + this.z + CONFIG.cameraDistance);
+                
+                const screenX = width/2 + this.x * scale;
+                // Calculate Y: Horizon + CameraHeight offset + Object Height Offset
+                const screenY = CONFIG.horizonY + (CONFIG.cameraHeight + this.yOff) * scale;
+                
+                const size = this.sizeBase * scale;
+
+                ctx.font = `${size}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                
+                // Opacity fade in from distance
+                ctx.globalAlpha = Math.min(1, 1 - (this.z / 2000));
+                ctx.fillText(this.emoji, screenX, screenY + (size/2)); // Adjust pivot
+                ctx.globalAlpha = 1.0;
+            }
         }
 
-        function endGame() {
-            gameState = 'gameover';
-            gameOverEl.style.display = 'block';
+        // --- INPUT ---
+        function move(dir) {
+            if (!gameActive) {
+                if (Date.now() - lastDeath > 500) reset();
+                return;
+            }
+            if (dir === 'left' && player.lane > -1) player.lane--;
+            if (dir === 'right' && player.lane < 1) player.lane++;
         }
 
-        window.resetGame = function() {
-            obstacles.forEach(obs => scene.remove(obs));
+        function jump() {
+            if (!gameActive) {
+                if (Date.now() - lastDeath > 500) reset();
+                return;
+            }
+            if (!player.isJumping) {
+                player.isJumping = true;
+                player.vy = CONFIG.jumpForce;
+            }
+        }
+
+        window.addEventListener('keydown', e => {
+            if (e.key === 'ArrowLeft' || e.key === 'a') move('left');
+            if (e.key === 'ArrowRight' || e.key === 'd') move('right');
+            if (e.key === ' ' || e.key === 'ArrowUp') jump();
+        });
+
+        // Touch Input
+        window.addEventListener('touchstart', e => {
+            const touchX = e.touches[0].clientX;
+            const w3 = width / 3;
+            
+            if (touchX < w3) move('left');
+            else if (touchX > w3 * 2) move('right');
+            else jump();
+        });
+
+        let lastDeath = 0;
+
+        function gameOver() {
+            gameActive = false;
+            lastDeath = Date.now();
+            
+            ctx.fillStyle = "rgba(0,0,0,0.7)";
+            ctx.fillRect(0,0,width,height);
+            ctx.fillStyle = "white";
+            ctx.font = "bold 40px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("CRASH!", width/2, height/2);
+            ctx.font = "20px Arial";
+            ctx.fillText("Tap to Retry", width/2, height/2 + 50);
+        }
+
+        function reset() {
             obstacles = [];
             score = 0;
-            gameSpeed = GAME_SPEED_INITIAL;
-            spawnRate = SPAWN_RATE_INITIAL;
-            flamingoGroup.position.y = GROUND_LEVEL;
-            verticalVelocity = 0;
-            gameOverEl.style.display = 'none';
-            gameState = 'playing';
-            clock.start();
+            speed = CONFIG.baseSpeed;
+            player.lane = 0;
+            player.x = 0;
+            gameActive = true;
+            scoreEl.innerText = "0";
         }
 
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
+        // --- RENDER HELPERS ---
+        function drawGround() {
+            // Draw Sky
+            const grad = ctx.createLinearGradient(0, 0, 0, height);
+            grad.addColorStop(0, "#0b1026");
+            grad.addColorStop(0.4, "#2b1054");
+            grad.addColorStop(0.4, "#ff00cc"); // Retro horizon line
+            grad.addColorStop(1, "#120a2e");
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw Grid Floor
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, CONFIG.horizonY, width, height - CONFIG.horizonY);
+            ctx.clip(); // Only draw floor below horizon
+
+            ctx.fillStyle = "#1a0b2e";
+            ctx.fill();
+
+            // Moving Horizontal Lines (Speed effect)
+            ctx.strokeStyle = "rgba(255, 0, 204, 0.3)";
+            ctx.lineWidth = 2;
+            
+            // Logarithmic z-lines for perspective
+            let offset = (frame * speed) % 100;
+            for(let z=0; z<2000; z+=100) {
+                let actualZ = z - offset;
+                if (actualZ < 0) actualZ += 2000;
+                
+                const scale = CONFIG.fov / (CONFIG.fov + actualZ + CONFIG.cameraDistance);
+                const screenY = CONFIG.horizonY + (CONFIG.cameraHeight + 100) * scale; // +100 to push floor down
+                
+                ctx.beginPath();
+                ctx.moveTo(0, screenY);
+                ctx.lineTo(width, screenY);
+                ctx.stroke();
+            }
+
+            // Vertical Lane Lines
+            ctx.strokeStyle = "rgba(0, 255, 255, 0.2)";
+            const lanes = [-1.5, -0.5, 0.5, 1.5]; // Lane dividers
+            lanes.forEach(laneX => {
+                const worldX = laneX * CONFIG.laneWidth;
+                
+                // Point at horizon (vanishing point)
+                const scaleFar = CONFIG.fov / (CONFIG.fov + 2000 + CONFIG.cameraDistance);
+                const xFar = width/2 + worldX * scaleFar;
+                const yFar = CONFIG.horizonY + (CONFIG.cameraHeight + 100) * scaleFar;
+
+                // Point near camera
+                const scaleNear = CONFIG.fov / (CONFIG.fov + 0 + CONFIG.cameraDistance);
+                const xNear = width/2 + worldX * scaleNear;
+                const yNear = CONFIG.horizonY + (CONFIG.cameraHeight + 100) * scaleNear;
+
+                ctx.beginPath();
+                ctx.moveTo(xFar, yFar);
+                ctx.lineTo(xNear, yNear);
+                ctx.stroke();
+            });
+
+            ctx.restore();
         }
+
+        // --- MAIN LOOP ---
+        function loop() {
+            requestAnimationFrame(loop);
+            
+            ctx.clearRect(0, 0, width, height);
+            drawGround();
+
+            if (gameActive) {
+                score++;
+                scoreEl.innerText = Math.floor(score/10);
+                speed += 0.005;
+
+                // Spawn Obstacles
+                if (frame % Math.max(20, 60 - Math.floor(score/500)) === 0) {
+                    obstacles.push(new Obstacle());
+                }
+            }
+
+            // Draw Objects (Sort by Z so far objects draw first)
+            obstacles.sort((a,b) => b.z - a.z);
+            obstacles.forEach(ob => {
+                if (gameActive) ob.update();
+                ob.draw();
+            });
+            
+            // Remove passed obstacles
+            obstacles = obstacles.filter(ob => ob.z > -200);
+
+            player.update();
+            player.draw();
+
+            frame++;
+        }
+
+        loop();
+
     </script>
 </body>
 </html>
+
